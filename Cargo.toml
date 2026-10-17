@@ -1,0 +1,104 @@
+[package]
+name = "nuxut-settings"
+description = "Nuxut Ayarlar uygulaması."
+version = "0.2.0-alpha.1"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "nuxut-settings"
+path = "src/main.rs"
+
+[dependencies]
+# `portal`: framework dosya seçicisi (Kullanıcı hesabı › profil resmi; zbus zaten bağımlılık).
+# a11y: AT-SPI ekran okuyucu adaptörü (framework ADR-0011); at-spi yoksa kurulmaz, Orca yokken ağaç kurulmaz.
+nuxut = { version = "0.2.0-alpha.1", path = "../framework/crates/nuxut", features = ["portal", "a11y"] }
+# Duvar kağıdından Material You paleti (palette.toml + şablon dışa aktarımı) — arka plan thread'inde.
+# Yalnızca `image`: tohum renk WallpaperDecoder karesinden (`source_color_from_frame`); CLI/işçi yok.
+nuxut-palette = { version = "0.2.0-alpha.1", path = "../framework/crates/nuxut-palette", default-features = false, features = ["image"] }
+# Duvar kağıdı küçük resmi: paylaşılan WallpaperDecoder (yalıtılmış işçi) + doku + çapraz geçiş.
+# Yalnızca `render`: JPEG XL (jxl-oxide) bu süreçte YOK, kullanıcı görseli işçide çözülür (ADR-0007).
+nuxut-image = { version = "0.2.0-alpha.1", path = "../framework/crates/nuxut-image", default-features = false, features = ["render"] }
+# Yalıtılmış işçi: tema önizlemelerindeki kullanıcı SVG'leri (ikon profili) ve duvar kağıdı + renk
+# örneklemesi (duvar kağıdı profili). İşçi ikilisi framework'ün nuxut-image-worker'ı.
+nuxut-image-sandbox = { version = "0.2.0-alpha.1", path = "../framework/crates/nuxut-image-sandbox" }
+# Biçim/yorum koruyan config düzenleme; framework'ün `toml` 1 sürümüyle aynı ayrıştırıcı ailesi.
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display", "serde"] }
+# shell `msg displays` JSON sözleşmesi (Ekranlar sayfası); shell ile aynı sürümler.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Takvim daemon'ının D-Bus sözleşmesi (yalnızca tipler + proxy; ağ/DB yok).
+nuxut-calendar-ipc = { version = "0.2.0-alpha.1", path = "../calendar/crates/nuxut-calendar-ipc" }
+# NetworkManager istemcisi (Bağlantılar › Wi-Fi, VPN; kabukla ortak, UI'sız; ajansız açılır).
+nuxut-nm = { version = "0.2.0-alpha.1", path = "../shell/crates/nuxut-nm" }
+# Parola alanından ve WireGuard dosyasından tek kopya (`Zeroizing<Vec<u8>>` → `nuxut_nm::Secret`);
+# framework ve nuxut-nm üzerinden zaten ağaçta, aynı sürüm.
+zeroize = "1"
+# BlueZ istemcisi (Bağlantılar › Bluetooth; kabukla ortak, UI'sız; ajansız açılır — eşleştirme onayı kabuğun ajanında).
+nuxut-bluez = { version = "0.2.0-alpha.1", path = "../shell/crates/nuxut-bluez" }
+# UPower + power-profiles-daemon istemcisi (Sistem › Güç; kabukla ortak, UI'sız; veri yolu B).
+nuxut-power = { version = "0.2.0-alpha.1", path = "../shell/crates/nuxut-power" }
+# Yerleşik Nuxut duvar kağıtları (shell deposu; gömülü SVG, kimlikler, tohum, bellek içi render, adlar).
+# `frame` özelliği kapalı (Ayarlar yalnız önizleme çizer).
+nuxut-wallpapers = { version = "0.2.0-alpha.1", path = "../shell/crates/nuxut-wallpapers" }
+# D-Bus: takvim servisi ve xdg-desktop-portal FileChooser. Shell ve takvimle aynı sürüm/yürütücü (async-io).
+zbus = "5.16"
+# Yalnız sürüm sabiti (kodda kullanılmaz; geçici): zbus'ın `unblock` havuzu. blocking 1.7.0'da boştaki havuz
+# thread'leri hiç çıkmıyor ve 500 ms'de bir uyanıyor (smol-rs/blocking #81). Gerekçe ve kaldırma koşulu:
+# docs/DEPENDENCIES.md (blocking satırı).
+blocking = "=1.6.2"
+# XKB düzen kataloğu (evdev.xml) ayrıştırma; usvg ile aynı sürüm, yeni crate inmez.
+roxmltree = { version = "0.21", default-features = false, features = ["std"] }
+# Yerel UTC ofseti (Tarih ve saat; `chrono::Local`). Zaten nuxut-locale üzerinden ağaçta, aynı sürüm.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# Profil resmi PNG kodlama (Kullanıcı hesabı); `image` üzerinden zaten ağaçta, aynı sürüm.
+png = "0.18"
+# CUPS: IPP istek/yanıt kodlaması (Sistem › Yazıcılar). Yalnız protokol; istemcisi (ureq/reqwest,
+# TLS) kapalı — HTTP/1.1 yerel sokete `services/printers/cups.rs`. docs/design/printers.md §1.
+ipp = { version = "7", default-features = false }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+
+[dev-dependencies]
+tempfile = "3"
+# Uçtan uca Bluetooth testi: crate'in paylaşılan sahte BlueZ'i (`tests/bluetooth_dbus.rs` onu
+# süreç içinde barındırır) async-io zamanlayıcısı kullanır; zaten zbus üzerinden ağaçta, aynı sürüm.
+async-io = "2"
+# Sözleşme testleri gerçek shell şemasını süreç içinde üretir (`widgets::real_shell_schema`):
+# derlenmiş ikili okunmaz, shell kaynağı değişince cargo yeniden derler (bayat ikili yok).
+nuxut-shell = { path = "../shell" }
+
+[features]
+# Yalnız testler ve canlı test ikilileri: ağ, Bluetooth ve güç servisleri `NUXUT_NM_BUS=session` /
+# `NUXUT_BLUEZ_BUS=session` / `NUXUT_POWER_BUS=session` ile dbus-run-session'ın oturum bus'ına bağlanır
+# (`bus_from_env`). Ürün derlemesinde yok: sistem bus'ından başka bus seçilemez
+# (karar 2026-10-14; docs/design/network-pages.md, bluetooth-page.md).
+test-support = ["nuxut-nm/test-support", "nuxut-bluez/test-support", "nuxut-power/test-support"]
+
+[[test]]
+name = "bluetooth_dbus"
+required-features = ["test-support"]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"
+
+# Disk: aynı makinede çok sayıda eşzamanlı derleme; hata ayıklama bilgisi yalnızca satır tabloları.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+opt-level = 2

@@ -1,0 +1,25 @@
+# Nuxut Ayarlar uygulama girdisi. Kurulum (shell install.sh): ~/.local/share/applications/
+# altına kopyalanır; Exec mutlak yola çevrilebilir:
+#   sed "s#^Exec=nuxut-settings#Exec=$BIN/nuxut-settings#" dist/nuxut-settings.desktop
+# İkon: dist/icons/hicolor/scalable/apps/nuxut-settings.svg →
+#   ~/.local/share/icons/hicolor/scalable/apps/nuxut-settings.svg
+# Hoş geldin penceresinin (app-id nuxut-welcome) gizli girdisi ayrı: dist/nuxut-welcome.desktop;
+# shell onu `nuxut-settings --welcome` ile açar.
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Nuxut Settings
+Name[tr]=Nuxut Ayarlar
+GenericName=Settings
+GenericName[tr]=Ayarlar
+Comment=Nuxut appearance, bar, wallpaper and account settings
+Comment[tr]=Nuxut görünüm, bar, duvar kağıdı ve hesap ayarları
+Exec=nuxut-settings
+Icon=nuxut-settings
+Terminal=false
+Categories=Settings;DesktopSettings;
+Keywords=settings;preferences;appearance;theme;wallpaper;bar;nuxut;
+Keywords[tr]=ayarlar;tercihler;görünüm;tema;duvar kağıdı;bar;nuxut;
+StartupNotify=true
+StartupWMClass=nuxut-settings
+SingleMainWindow=true

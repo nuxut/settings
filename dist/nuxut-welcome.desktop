@@ -1,0 +1,13 @@
+# Nuxut Hoş geldin penceresinin (app-id nuxut-welcome) gizli girdisi: menüde görünmez, yalnızca
+# görev çubuğu/başlatıcı pencereyi Ayarlar ikonuyla tanısın diye. Kurulum nuxut-settings.desktop
+# ile aynı (~/.local/share/applications/; Exec aynı sed ile mutlak yola çevrilebilir).
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Nuxut Welcome
+Name[tr]=Nuxut'a hoş geldin
+Exec=nuxut-settings --welcome
+Icon=nuxut-settings
+Terminal=false
+NoDisplay=true
+StartupWMClass=nuxut-welcome

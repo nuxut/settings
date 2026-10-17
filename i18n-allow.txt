@@ -1,0 +1,13 @@
+# Gömülü metin bekçisi (ADR-0010 §4) izin listesi: 'dosya:satır gerekçe' ya da 'dosya:* gerekçe'.
+# 'geçici' satırlar aşama B'de sayfa sayfa taşınınca silinir; liste yalnızca küçülür.
+# Loglar, CLI tanı çıktısı ve hata Display metinleri çevrilmez (ADR-0010 kararları).
+src/registry.rs:s!() kaynak tablo: kataloğun yedeği, kart kimliği, dilden bağımsız arama (314e539 tasarımı; karar A 2026-10-15). Görünen metin katalogdan (catalog_tests: anahtar var, tr = kaynak; tests/registry_english.rs)
+src/registry.rs:source_text!() kaynak tablolar (sayfa/grup/rol adları, bölüm anahtarları, seçenek etiketleri): s!() satırlarıyla aynı gerekçe; görünen metin katalogdan (text_or/t!)
+src/registry.rs:text_or() kaynak Türkçe yedek; gösterilen metin katalogdan (registry.rs kalıbı)
+src/registry.rs:out.push() tanı: schema_mismatches yalnız günlüğe (audit_schema tracing::warn) ve testlere gider
+src/pages/edges.rs:text_or() tanı: kayıt tablosu kalıbı; anahtar katalogda yoksa kaynak Türkçeye düşer (registry.rs'deki kullanım gibi)
+src/pages/fonts.rs:text_or() tanı: kaynak Türkçe yedek; gösterilen metin katalogdan (registry.rs kalıbı)
+src/typography.rs:text_or() tanı: kaynak Türkçe yedek; gösterilen metin katalogdan (registry.rs kalıbı)
+# hypr_status::source_note, &'static str dönebilmek için text_or'un kaynak Türkçe yedeğini taşır
+# (registry.rs kalıbı); etkin dildeki karşılığı settings-hypr-status-source-removed.
+src/services/hypr_status.rs:text_or() tanı: text_or kaynak Türkçe yedeği (registry.rs kalıbı); katalog karşılığı settings-hypr-status-source-removed
