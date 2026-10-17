@@ -2907,7 +2907,7 @@ settings-theme-grid-button-copy-command = Kurulum komutunu kopyala
 settings-theme-grid-variant-base = Standart
 
 # Nerede: Görünüm sayfasında ızgaranın altındaki not; kurulu olmayan aile kartı gösterilirken ve kurulum komutu biliniyorken (src/pages/theme_grid.rs). Anlam: Ailenin kurulu olmadığı ve terminalden kurulabileceği.
-# Değişkenler: $name (tema ailesinin adı, ör. "Flat-Remix"), $command (kurulum komutu, ör. "sudo pacman -S flat-remix-gtk-theme").
+# Değişkenler: $name (tema ailesinin adı, ör. "Flat-Remix"), $command (AUR kurulum komutu, ör. "paru -S flat-remix-gtk-theme").
 settings-theme-grid-footer-missing-command = { $name } kurulu değil. Kurmak için terminalde: { $command }
 
 # Nerede: Aynı not; kurulum komutu bilinmiyorken (src/pages/theme_grid.rs). Anlam: Ailenin kurulu olmadığı.
@@ -2915,8 +2915,25 @@ settings-theme-grid-footer-missing-command = { $name } kurulu değil. Kurmak iç
 settings-theme-grid-footer-missing = { $name } kurulu değil.
 
 # Nerede: Görünüm sayfasında ızgaranın altındaki not; seçili tema kurulu değilken ve kurulum komutu biliniyorken (src/pages/theme_grid.rs). Anlam: Tema kurulana dek yedek temanın kullanılacağı ve terminalden kurulabileceği.
-# Değişkenler: $name (temanın adı, ör. "Flat-Remix"), $command (kurulum komutu, ör. "sudo pacman -S flat-remix-gtk-theme").
+# Değişkenler: $name (temanın adı, ör. "Flat-Remix"), $command (AUR kurulum komutu, ör. "paru -S flat-remix-gtk-theme").
 settings-theme-grid-footer-fallback-command = { $name } kurulu değil; kurulana dek yedek tema kullanılır. Kurmak için terminalde: { $command }
+
+# Nerede: Görünüm sayfasında ızgaranın altındaki not; kurulu olmayan aile kartı gösterilirken ve paket resmî depodayken; yanında "Kur" düğmesi (src/pages/theme_grid.rs). Anlam: Ailenin kurulu olmadığı ve düğmeyle, yönetici onayıyla kurulabileceği.
+# Değişkenler: $name (tema ailesinin adı, ör. "Papirus").
+settings-theme-grid-footer-missing-install = { $name } kurulu değil. Kur düğmesi yönetici onayıyla kurar.
+
+# Nerede: Görünüm sayfasında ızgaranın altındaki not; seçili tema kurulu değilken ve paket resmî depodayken; yanında "Kur" düğmesi (src/pages/theme_grid.rs). Anlam: Tema kurulana dek yedek temanın kullanılacağı ve düğmeyle kurulabileceği.
+# Değişkenler: $name (temanın adı, ör. "Papirus").
+settings-theme-grid-footer-fallback-install = { $name } kurulu değil; kurulana dek yedek tema kullanılır. Kur düğmesi yönetici onayıyla kurar.
+
+# Nerede: Görünüm sayfasında eksik paket notunun ve tema ızgarasının yanındaki metin düğme (src/pages/fix_button.rs). Anlam: Önerilen resmî depo paketlerini kurar; yönetici onayı istenir.
+settings-packages-install = Kur
+
+# Nerede: Aynı düğme, kurulum sürerken (basılamaz) (src/pages/fix_button.rs). Anlam: Paketlerin kurulmakta olduğu.
+settings-packages-installing = Kuruluyor…
+
+# Nerede: Eksik paket notunun sonuna eklenen cümle (src/pages/look.rs, src/pages/theme_grid.rs). Anlam: Son kurulum denemesinin başarısız olduğu.
+settings-packages-failed = Son kurulum tamamlanamadı.
 
 # Nerede: Aynı not; kurulum komutu bilinmiyorken (src/pages/theme_grid.rs). Anlam: Tema kurulunca uygulanacağı, o zamana dek yedek temanın kullanılacağı.
 # Değişkenler: $name (temanın adı, ör. "Flat-Remix").

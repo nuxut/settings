@@ -19,6 +19,7 @@ pub mod night_light;
 pub mod outputs;
 pub mod power;
 pub mod printers;
+pub mod packages;
 pub mod palette;
 pub mod portal;
 pub mod previews;

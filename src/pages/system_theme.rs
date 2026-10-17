@@ -177,8 +177,12 @@ pub struct SystemThemeCard {
     view: View,
     row: Rect,
     note_rect: Rect,
-    /// Odak geri al düğmesinde (anahtar kilitliyken).
-    revert_focus: bool,
+    /// Odak bu blokta mı, halka görünür mü, odak düğmede mi (değilse anahtarda). Tab anahtardan
+    /// düğmeye geçer ([`Block::focus_step`]); anahtar kilitliyken odak doğrudan düğmede
+    /// (erişilebilirlik, 2026-10-17: önceden anahtar etkinken düğmeye klavyeyle ulaşılamıyordu).
+    focused: bool,
+    focus_visible: bool,
+    on_button: bool,
 }
 
 impl SystemThemeCard {
@@ -192,7 +196,9 @@ impl SystemThemeCard {
             view: view(&State::default()),
             row: Rect::ZERO,
             note_rect: Rect::ZERO,
-            revert_focus: false,
+            focused: false,
+            focus_visible: false,
+            on_button: false,
         };
         st::refresh();
         c.update(Instant::now());
@@ -210,6 +216,7 @@ impl SystemThemeCard {
             self.note.set_text(text);
         }
         self.revert.set_label(&if self.view.update { t!("settings-system-theme-update") } else { t!("settings-system-theme-revert") });
+        self.sync_rings();
     }
 
     fn flip(&self) {
@@ -220,6 +227,17 @@ impl SystemThemeCard {
 
     fn revert_inset(&mut self, env: &mut Env) -> f32 {
         if self.action().is_some() { self.revert.preferred_size(env.text, env.theme).width + env.theme.space(3) } else { 0.0 }
+    }
+
+    /// Odak halkaları: düğme yoksa ya da anahtar kilitliyse odak kendiliğinden doğru parçaya.
+    fn sync_rings(&mut self) {
+        if self.action().is_none() {
+            self.on_button = false;
+        } else if !self.view.enabled {
+            self.on_button = true;
+        }
+        self.toggle.set_focus_visible(self.focus_visible && !self.on_button && self.view.enabled);
+        self.revert.set_focus_visible(self.focus_visible && self.on_button);
     }
 
     /// Not yanındaki düğmenin işi: güncelleme varsa "Güncelle", uygulanmışsa "Geri al".
@@ -296,7 +314,7 @@ impl Block for SystemThemeCard {
         if e.state == KeyState::Released {
             return false;
         }
-        if self.revert_focus && self.action().is_some() {
+        if self.on_button && self.action().is_some() {
             let r = self.revert.key(e, env.now);
             if r.event.is_some() {
                 if let Some(op) = self.action() {
@@ -318,10 +336,23 @@ impl Block for SystemThemeCard {
     }
 
     fn set_focus(&mut self, focused: bool, visible: bool, _now: Instant) {
-        // Anahtar etkinse odak onda; değilse (uygulanmış) geri al düğmesinde.
-        self.toggle.set_focus_visible(focused && visible && self.view.enabled);
-        self.revert_focus = focused && !self.view.enabled && self.action().is_some();
-        self.revert.set_focus_visible(self.revert_focus && visible);
+        // Yeni odak anahtarda başlar (etkinse); değilse düğmede.
+        if focused && !self.focused {
+            self.on_button = !self.view.enabled;
+        }
+        self.focused = focused;
+        self.focus_visible = focused && visible;
+        self.sync_rings();
+    }
+
+    fn focus_step(&mut self, forward: bool, _now: Instant) -> bool {
+        let both = self.view.enabled && self.action().is_some();
+        if !both || forward == self.on_button {
+            return false;
+        }
+        self.on_button = forward;
+        self.sync_rings();
+        true
     }
 
     fn cursor(&self, p: Point) -> Option<CursorShape> {
@@ -440,6 +471,30 @@ mod tests {
         f.exit = Some(Some(1));
         let (k, text) = view(&State { run: Some(f), ..s }).note.unwrap();
         assert!(k == NoticeKind::Warning && text.contains("mkinitcpio"));
+    }
+
+    /// Erişilebilirlik (2026-10-17): anahtar etkinken de "Güncelle"/"Geri al" düğmesine Tab ile
+    /// ulaşılır; anahtar kilitliyken odak doğrudan düğmede.
+    #[test]
+    fn tab_reaches_the_button_when_the_switch_is_enabled() {
+        crate::i18n::use_turkish_for_tests();
+        let theme = Theme::default();
+        let now = Instant::now();
+        let mut c = SystemThemeCard::new(&theme);
+        c.view = view(&State { status: Some(Ok(Status { update: true, ..status(Helper::Installed, TargetState::Ready) })), ..State::default() });
+        assert!(c.view.enabled && c.view.update);
+        c.set_focus(true, true, now);
+        assert!(!c.on_button, "önce anahtar");
+        assert!(c.focus_step(true, now) && c.on_button, "Tab düğmeye");
+        assert!(!c.focus_step(true, now), "sonraki blok");
+        assert!(c.focus_step(false, now) && !c.on_button, "Shift+Tab anahtara");
+        assert!(!c.focus_step(false, now));
+        // Anahtar kilitli (uygulanmış, iş yok): odak doğrudan düğmede.
+        c.set_focus(false, false, now);
+        c.view = view(&State { status: Some(Ok(status(Helper::Installed, TargetState::Applied))), ..State::default() });
+        assert!(!c.view.enabled && c.view.revert);
+        c.set_focus(true, true, now);
+        assert!(c.on_button && !c.focus_step(true, now));
     }
 
     #[test]

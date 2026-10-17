@@ -284,9 +284,9 @@ pub struct CatalogFamily {
 }
 
 impl CatalogFamily {
-    /// Bu ailenin kurulum komutu (repo `sudo pacman -S`, AUR kurulu yardımcıyla; bkz. [`install_line`]).
-    pub fn install_command(&self, helper: Option<AurHelper>) -> String {
-        install_line(self.source, &self.package, helper)
+    /// Bu ailenin düzeltmesi: depo paketi "Kur" düğmesi, AUR kurulu yardımcının komutu ([`package_fix`]).
+    pub fn fix(&self, helper: Option<AurHelper>) -> Fix {
+        package_fix(self.source, &[self.package.as_str()], helper)
     }
 }
 
@@ -493,21 +493,36 @@ pub enum Tone {
     Warning,
 }
 
-/// Kullanıcıya gösterilecek durum: ton, metin ve (varsa) panoya kopyalanacak kurulum komutu.
+/// Kullanıcıya gösterilecek durum: ton, metin ve (varsa) düğmeyle yapılacak düzeltme.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusLine {
     pub tone: Tone,
     pub text: String,
-    pub command: Option<String>,
+    pub fix: Option<Fix>,
 }
 
-/// Bir depodan paket kuran tek satır: repo `sudo pacman -S`, AUR kurulu yardımcıyla (`paru -S` /
-/// `yay -S`; hiçbiri yoksa `paru -S` ve arayüz [`aur_helper_note`]'u gösterir). Adlar
-/// `valid_package`'tan geçmiştir (kabuk özel karakteri yok).
-pub fn install_line(source: PackageSource, names: &str, helper: Option<AurHelper>) -> String {
+/// Eksik paketin düzeltmesi (kullanıcı kararı 2026-10-17: kök komutu yazdırılmaz, kök gerektiren
+/// düzeltme bir düğmeyle). Resmî depo paketleri "Kur" düğmesiyle kök yardımcının `packages`
+/// alanından kurulur ([`super::packages`], yönetici onayı); AUR paketi kök olarak derlenmediği için
+/// kopyalanacak yardımcı komutu (`paru -S` / `yay -S`) kalır.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fix {
+    Install(Vec<String>),
+    Copy(String),
+}
+
+/// AUR paketini kuran satır: kurulu yardımcıyla (`paru -S` / `yay -S`; hiçbiri yoksa `paru -S` ve
+/// arayüz [`aur_helper_note`]'u gösterir). Adlar `valid_package`'tan geçmiştir (kabuk özel
+/// karakteri yok).
+pub fn aur_line(names: &str, helper: Option<AurHelper>) -> String {
+    format!("{} -S {names}", helper.unwrap_or(AurHelper::Paru).command())
+}
+
+/// Bir paketin (ya da aynı depodaki paketlerin) düzeltmesi.
+pub fn package_fix(source: PackageSource, names: &[&str], helper: Option<AurHelper>) -> Fix {
     match source {
-        PackageSource::Repo => format!("sudo pacman -S {names}"),
-        PackageSource::Aur => format!("{} -S {names}", helper.unwrap_or(AurHelper::Paru).command()),
+        PackageSource::Repo => Fix::Install(names.iter().map(|n| (*n).to_owned()).collect()),
+        PackageSource::Aur => Fix::Copy(aur_line(&names.join(" "), helper)),
     }
 }
 
@@ -516,17 +531,14 @@ pub fn needs_helper_note(aur: bool, helper: Option<AurHelper>) -> bool {
     aur && helper.is_none()
 }
 
-/// Kurulum komutu: depo paketleri bir `pacman`, AUR paketleri bir yardımcı satırı (depo bilgisi
+/// Eksik paketlerin düzeltmesi: depo paketi varsa önce onlar ("Kur"; AUR olanlar metinde adıyla
+/// kalır, depo paketleri kurulunca kopyalanacak komut görünür), yoksa AUR komutu (depo bilgisi
 /// shell'den; addan tahmin yok).
-pub fn install_command<'a>(packages: impl IntoIterator<Item = &'a MissingPackage> + Clone, helper: Option<AurHelper>) -> Option<String> {
-    let lines: Vec<String> = [PackageSource::Repo, PackageSource::Aur]
-        .into_iter()
-        .filter_map(|src| {
-            let names = packages.clone().into_iter().filter(|p| p.source == src).map(|p| p.name.as_str()).collect::<Vec<_>>().join(" ");
-            (!names.is_empty()).then(|| install_line(src, &names, helper))
-        })
-        .collect();
-    (!lines.is_empty()).then(|| lines.join("\n"))
+pub fn missing_fix<'a>(packages: impl IntoIterator<Item = &'a MissingPackage> + Clone, helper: Option<AurHelper>) -> Option<Fix> {
+    [PackageSource::Repo, PackageSource::Aur].into_iter().find_map(|src| {
+        let names: Vec<&str> = packages.clone().into_iter().filter(|p| p.source == src).map(|p| p.name.as_str()).collect();
+        (!names.is_empty()).then(|| package_fix(src, &names, helper))
+    })
 }
 
 /// Genel notta gösterilecek eksik paketler: ikon/imleç hedefli olanlar ızgaralarda katalogdan
@@ -609,7 +621,7 @@ pub fn status_line(state: &LookState) -> Option<StatusLine> {
 
 /// [`status_line`], AUR yardımcısı verilerek (saf; testli).
 pub fn status_line_with(state: &LookState, helper: Option<AurHelper>) -> Option<StatusLine> {
-    let line = |tone, text: String| Some(StatusLine { tone, text, command: None });
+    let line = |tone, text: String| Some(StatusLine { tone, text, fix: None });
     match state {
         LookState::Pending => line(Tone::Info, t!("settings-look-status-pending")),
         LookState::NotRunning => line(Tone::Info, t!("settings-look-status-not-running")),
@@ -625,17 +637,17 @@ pub fn status_line_with(state: &LookState, helper: Option<AurHelper>) -> Option<
                 if !missing.is_empty() {
                     text = format!("{text} {}", missing_text(&missing, helper));
                 }
-                return Some(StatusLine { tone: Tone::Info, text, command: install_command(missing.iter().copied(), helper) });
+                return Some(StatusLine { tone: Tone::Info, text, fix: missing_fix(missing.iter().copied(), helper) });
             }
             if !missing.is_empty() {
-                return Some(StatusLine { tone: Tone::Warning, text: missing_text(&missing, helper), command: install_command(missing.iter().copied(), helper) });
+                return Some(StatusLine { tone: Tone::Warning, text: missing_text(&missing, helper), fix: missing_fix(missing.iter().copied(), helper) });
             }
             if let Some(a) = &s.last_apply {
                 // Gerçek hata önce (genel metin); yoksa dosya başına neden (sürüm 5), sonra
                 // durdurulan ayarlar. Eski shell `external` göndermez: genel metne düşer.
                 if a.errors == 0 && !a.external.is_empty() {
                     // Kök komutu (chown) önerilmez (kullanıcı kararı 2026-10-17).
-                    return Some(StatusLine { tone: Tone::Warning, text: external_text(&a.external), command: None });
+                    return Some(StatusLine { tone: Tone::Warning, text: external_text(&a.external), fix: None });
                 }
                 if a.errors == 0 && a.paused > 0 {
                     return line(Tone::Warning, t!("settings-look-status-paused"));
@@ -855,9 +867,9 @@ mod tests {
     fn package_source_comes_from_shell_not_name() {
         // Ad soneki tahmini yok: "-git" depo paketi olabilir, "-bin" olmayan AUR paketi olabilir.
         let pk = [pkg("foo-git", PackageSource::Repo), pkg("papirus-folders", PackageSource::Aur)];
-        assert_eq!(install_command(&pk, Some(AurHelper::Paru)).as_deref(), Some("sudo pacman -S foo-git\nparu -S papirus-folders"));
-        assert_eq!(install_command(&pk[..1], None).as_deref(), Some("sudo pacman -S foo-git"));
-        assert_eq!(install_command(&[], None), None);
+        assert_eq!(missing_fix(&pk, Some(AurHelper::Paru)), Some(Fix::Install(vec!["foo-git".into()])), "depo paketi önce, düğmeyle");
+        assert_eq!(missing_fix(&pk[1..], Some(AurHelper::Paru)), Some(Fix::Copy("paru -S papirus-folders".into())));
+        assert_eq!(missing_fix(&[], None), None);
     }
 
     /// Shell sürüm 3 (shell 5263e5f `status_json_contract`): katalog + `missing_packages[].target`.
@@ -914,11 +926,11 @@ mod tests {
     }
 
     #[test]
-    fn family_install_command_by_source() {
+    fn family_fix_by_source() {
         let s = parse_status(STATUS_V3).unwrap();
         let c = s.catalog(ThemeKind::Cursors).unwrap();
-        assert_eq!(c[0].install_command(None), "sudo pacman -S vimix-cursors");
-        assert_eq!(c[1].install_command(Some(AurHelper::Paru)), "paru -S oreo-cursors-bin");
+        assert_eq!(c[0].fix(None), Fix::Install(vec!["vimix-cursors".into()]));
+        assert_eq!(c[1].fix(Some(AurHelper::Paru)), Fix::Copy("paru -S oreo-cursors-bin".into()));
     }
 
     /// PATH test içinde geçici dizinlerle verilir (süreç ortamı değişmez): paru önce, sonra yay;
@@ -952,20 +964,20 @@ mod tests {
     #[test]
     fn aur_command_follows_helper_and_notes_missing_one() {
         crate::i18n::use_turkish_for_tests();
-        assert_eq!(install_line(PackageSource::Aur, "oreo-cursors-bin", Some(AurHelper::Paru)), "paru -S oreo-cursors-bin");
-        assert_eq!(install_line(PackageSource::Aur, "oreo-cursors-bin", Some(AurHelper::Yay)), "yay -S oreo-cursors-bin");
-        assert_eq!(install_line(PackageSource::Aur, "oreo-cursors-bin", None), "paru -S oreo-cursors-bin", "yardımcı yok: paru önerilir");
-        assert_eq!(install_line(PackageSource::Repo, "vimix-cursors", Some(AurHelper::Yay)), "sudo pacman -S vimix-cursors", "depo değişmez");
+        assert_eq!(aur_line("oreo-cursors-bin", Some(AurHelper::Paru)), "paru -S oreo-cursors-bin");
+        assert_eq!(aur_line("oreo-cursors-bin", Some(AurHelper::Yay)), "yay -S oreo-cursors-bin");
+        assert_eq!(aur_line("oreo-cursors-bin", None), "paru -S oreo-cursors-bin", "yardımcı yok: paru önerilir");
+        assert_eq!(package_fix(PackageSource::Repo, &["vimix-cursors"], Some(AurHelper::Yay)), Fix::Install(vec!["vimix-cursors".into()]), "depo: kök komutu değil, düğme");
         assert!(needs_helper_note(true, None));
         assert!(!needs_helper_note(true, Some(AurHelper::Yay)) && !needs_helper_note(false, None));
         // Genel durum notu da aynı yardımcıyı ve notu kullanır.
         let s = parse_status(STATUS_V3).unwrap();
         let state = LookState::Ready(Box::new(s));
         let yay = status_line_with(&state, Some(AurHelper::Yay)).unwrap();
-        assert_eq!(yay.command.as_deref(), Some("sudo pacman -S plasma-integration\nyay -S yeni-hedef"));
+        assert_eq!(yay.fix, Some(Fix::Install(vec!["plasma-integration".into()])));
         assert!(!yay.text.contains(&aur_helper_note()));
         let none = status_line_with(&state, None).unwrap();
-        assert_eq!(none.command.as_deref(), Some("sudo pacman -S plasma-integration\nparu -S yeni-hedef"));
+        assert_eq!(none.fix, Some(Fix::Install(vec!["plasma-integration".into()])));
         assert!(none.text.ends_with(&aur_helper_note()), "{}", none.text);
         // Yalnızca depo paketi: not yok.
         let repo_only = LookStatus { missing_packages: vec![pkg("plasma-integration", PackageSource::Repo)], ..Default::default() };
@@ -981,20 +993,20 @@ mod tests {
         let line = status_line_with(&LookState::Ready(Box::new(s.clone())), Some(AurHelper::Paru)).unwrap();
         assert_eq!(line.tone, Tone::Warning);
         assert!(!line.text.contains("vimix-cursors"));
-        assert_eq!(line.command.as_deref(), Some("sudo pacman -S plasma-integration\nparu -S yeni-hedef"));
+        assert_eq!(line.fix, Some(Fix::Install(vec!["plasma-integration".into()])));
         // Yalnızca tema paketleri eksikse genel not "Uygulandı" der.
         let only_theme = LookStatus { missing_packages: s.missing_packages[..1].to_vec(), ..s };
         let line = status_line_with(&LookState::Ready(Box::new(only_theme)), Some(AurHelper::Paru)).unwrap();
-        assert_eq!((line.tone, line.command), (Tone::Ok, None));
+        assert_eq!((line.tone, line.fix), (Tone::Ok, None));
     }
 
     #[test]
-    fn status_line_prefers_missing_packages_with_install_command() {
+    fn status_line_prefers_missing_packages_with_install_button() {
         crate::i18n::use_turkish_for_tests();
         let s = parse_status(STATUS_JSON).unwrap();
         let line = status_line_with(&LookState::Ready(Box::new(s.clone())), Some(AurHelper::Paru)).unwrap();
         assert_eq!(line.tone, Tone::Warning);
-        assert_eq!(line.command.as_deref(), Some("sudo pacman -S plasma-integration\nparu -S bibata-cursor-theme-bin"));
+        assert_eq!(line.fix, Some(Fix::Install(vec!["plasma-integration".into()])));
         let ok = LookStatus { missing_packages: vec![], ..s };
         let line = status_line_with(&LookState::Ready(Box::new(ok.clone())), Some(AurHelper::Paru)).unwrap();
         assert_eq!(line.tone, Tone::Ok);
@@ -1031,7 +1043,7 @@ mod tests {
         assert!(line.text.contains("ikonlarını almıyor"));
         assert!(!line.text.contains("/nix/store"), "ilk iki benzersiz dosya adıyla anılır");
         assert!(line.text.ends_with("2 dosya daha aynı durumda."), "{}", line.text);
-        assert_eq!(line.command, None, "sahiplik komutu önerilmez (kullanıcı kararı 2026-10-17)");
+        assert_eq!(line.fix, None, "sahiplik komutu önerilmez (kullanıcı kararı 2026-10-17)");
 
         // Gerçek hata varsa genel metin; yalnızca durdurulan ayar varsa kendi notu.
         let failed = LastApply { errors: 1, ..a.clone() };
@@ -1072,12 +1084,12 @@ mod tests {
         let line = status_line_with(&LookState::Ready(Box::new(s.clone())), Some(AurHelper::Paru)).unwrap();
         assert_eq!(line.tone, Tone::Info);
         assert!(line.text.contains("kaydedildi") && !line.text.contains("Uygulandı"));
-        assert_eq!(line.command, None);
+        assert_eq!(line.fix, None);
         let with_pkg = LookStatus { missing_packages: vec![pkg("papirus-icon-theme", PackageSource::Repo)], ..s };
         let line = status_line_with(&LookState::Ready(Box::new(with_pkg)), Some(AurHelper::Paru)).unwrap();
         assert_eq!(line.tone, Tone::Info, "eksik paket de sakin not içinde");
         assert!(line.text.contains("papirus-icon-theme"));
-        assert_eq!(line.command.as_deref(), Some("sudo pacman -S papirus-icon-theme"));
+        assert_eq!(line.fix, Some(Fix::Install(vec!["papirus-icon-theme".into()])));
     }
 
     #[test]

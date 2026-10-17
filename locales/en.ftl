@@ -2953,7 +2953,7 @@ settings-theme-grid-button-copy-command = Copy install command
 settings-theme-grid-variant-base = Standard
 
 # Nerede: Görünüm sayfasında ızgaranın altındaki not; kurulu olmayan aile kartı gösterilirken ve kurulum komutu biliniyorken (src/pages/theme_grid.rs). Anlam: Ailenin kurulu olmadığı ve terminalden kurulabileceği.
-# Değişkenler: $name (tema ailesinin adı, ör. "Flat-Remix"), $command (kurulum komutu, ör. "sudo pacman -S flat-remix-gtk-theme").
+# Değişkenler: $name (tema ailesinin adı, ör. "Flat-Remix"), $command (AUR kurulum komutu, ör. "paru -S flat-remix-gtk-theme").
 settings-theme-grid-footer-missing-command = { $name } is not installed. To install, run in a terminal: { $command }
 
 # Nerede: Aynı not; kurulum komutu bilinmiyorken (src/pages/theme_grid.rs). Anlam: Ailenin kurulu olmadığı.
@@ -2961,8 +2961,25 @@ settings-theme-grid-footer-missing-command = { $name } is not installed. To inst
 settings-theme-grid-footer-missing = { $name } is not installed.
 
 # Nerede: Görünüm sayfasında ızgaranın altındaki not; seçili tema kurulu değilken ve kurulum komutu biliniyorken (src/pages/theme_grid.rs). Anlam: Tema kurulana dek yedek temanın kullanılacağı ve terminalden kurulabileceği.
-# Değişkenler: $name (temanın adı, ör. "Flat-Remix"), $command (kurulum komutu, ör. "sudo pacman -S flat-remix-gtk-theme").
+# Değişkenler: $name (temanın adı, ör. "Flat-Remix"), $command (AUR kurulum komutu, ör. "paru -S flat-remix-gtk-theme").
 settings-theme-grid-footer-fallback-command = { $name } is not installed; a fallback theme is used until it is installed. To install, run in a terminal: { $command }
+
+# Nerede: Görünüm sayfasında ızgaranın altındaki not; kurulu olmayan aile kartı gösterilirken ve paket resmî depodayken; yanında "Kur" düğmesi (src/pages/theme_grid.rs). Anlam: Ailenin kurulu olmadığı ve düğmeyle, yönetici onayıyla kurulabileceği.
+# Değişkenler: $name (tema ailesinin adı, ör. "Papirus").
+settings-theme-grid-footer-missing-install = { $name } isn't installed. Install sets it up with administrator approval.
+
+# Nerede: Görünüm sayfasında ızgaranın altındaki not; seçili tema kurulu değilken ve paket resmî depodayken; yanında "Kur" düğmesi (src/pages/theme_grid.rs). Anlam: Tema kurulana dek yedek temanın kullanılacağı ve düğmeyle kurulabileceği.
+# Değişkenler: $name (temanın adı, ör. "Papirus").
+settings-theme-grid-footer-fallback-install = { $name } isn't installed; a fallback theme is used until it is. Install sets it up with administrator approval.
+
+# Nerede: Görünüm sayfasında eksik paket notunun ve tema ızgarasının yanındaki metin düğme (src/pages/fix_button.rs). Anlam: Önerilen resmî depo paketlerini kurar; yönetici onayı istenir.
+settings-packages-install = Install
+
+# Nerede: Aynı düğme, kurulum sürerken (basılamaz) (src/pages/fix_button.rs). Anlam: Paketlerin kurulmakta olduğu.
+settings-packages-installing = Installing…
+
+# Nerede: Eksik paket notunun sonuna eklenen cümle (src/pages/look.rs, src/pages/theme_grid.rs). Anlam: Son kurulum denemesinin başarısız olduğu.
+settings-packages-failed = The last installation didn't finish.
 
 # Nerede: Aynı not; kurulum komutu bilinmiyorken (src/pages/theme_grid.rs). Anlam: Tema kurulunca uygulanacağı, o zamana dek yedek temanın kullanılacağı.
 # Değişkenler: $name (temanın adı, ör. "Flat-Remix").

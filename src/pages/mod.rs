@@ -31,6 +31,7 @@ mod panel_hint;
 #[cfg(test)]
 mod text_pages_tests;
 mod color_theme;
+mod fix_button;
 mod look;
 mod source_note;
 mod motion;

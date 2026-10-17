@@ -20,7 +20,9 @@ use toml_edit::Value;
 use crate::block::{Action, Block, Env};
 use crate::registry::SettingDesc;
 use crate::rows::{PreviousAction, is_narrow, row_height_for, row_padding};
-use crate::services::look::{self, LookState, Tone};
+use super::fix_button::FixButton;
+use crate::services::look::{self, Fix, LookState, Tone};
+use crate::services::packages;
 use crate::store::{FileId, KeyPath, Store};
 
 /// Kip seçenekleri (`[colors] mode`). İlki varsayılan: "Otomatik" seçilince anahtar silinir.
@@ -268,8 +270,7 @@ pub struct LookStatus {
     /// Durum satırı: framework notu (uygulandı = başarı, eksik paket/hata = uyarı, diğerleri
     /// sakin bilgi).
     note: Notice,
-    copy: Button,
-    command: Option<String>,
+    fix: FixButton,
     rect: Rect,
     /// Son görülen seçim (değişince durum yeniden sorulur).
     seen: Option<String>,
@@ -290,8 +291,7 @@ impl LookStatus {
         let mut s = Self {
             desc,
             note: Notice::new(theme, NoticeKind::Info, ""),
-            copy: Button::new(theme, ButtonVariant::Text).with_icon(theme, Icon::named(IconName::Copy)).with_label(theme, t!("settings-look-copy-command")),
-            command: None,
+            fix: FixButton::new(theme, t!("settings-look-copy-command")),
             rect: Rect::ZERO,
             seen: None,
         };
@@ -302,24 +302,27 @@ impl LookStatus {
     fn update(&mut self) {
         let state = look::status();
         let line = look::status_line(&state);
-        let (tone, text, command) = line.map_or((Tone::Info, String::new(), None), |l| (l.tone, l.text, l.command));
-        self.apply(tone, &text, command);
+        let (tone, mut text, fix) = line.map_or((Tone::Info, String::new(), None), |l| (l.tone, l.text, l.fix));
+        if matches!(fix, Some(Fix::Install(_))) && packages::last() == Some(packages::Outcome::Failed) {
+            text = format!("{text} {}", t!("settings-packages-failed"));
+        }
+        self.apply(tone, &text, fix);
         if matches!(state, LookState::Pending) && self.seen.is_none() {
             look::refresh(Duration::ZERO);
         }
     }
 
     /// Durum satırını nota yansıtır (saf; testler).
-    fn apply(&mut self, tone: Tone, text: &str, command: Option<String>) {
+    fn apply(&mut self, tone: Tone, text: &str, fix: Option<Fix>) {
         self.note.set_kind(notice_kind(tone));
         self.note.set_text(text);
-        self.command = command;
+        self.fix.set_fix(fix, Instant::now());
     }
 
     /// Notun genişliği (sağda kopyala düğmesi varsa onun payı düşülür).
     fn note_width(&mut self, text: &mut TextSystem, theme: &Theme, width: f32) -> f32 {
         let (px, _) = row_padding(theme);
-        let cw = if self.command.is_some() { self.copy.preferred_size(text, theme).width + theme.space(3) } else { 0.0 };
+        let cw = if self.fix.is_some() { self.fix.preferred_size(text, theme).width + theme.space(3) } else { 0.0 };
         (width - px * 2.0 - cw).max(theme.space(24))
     }
 }
@@ -350,7 +353,7 @@ impl Block for LookStatus {
         let t = env.theme;
         let (_, py) = row_padding(t);
         let w = self.note_width(env.text, t, width);
-        let bh = if self.command.is_some() { self.copy.preferred_size(env.text, t).height } else { 0.0 };
+        let bh = if self.fix.is_some() { self.fix.preferred_size(env.text, t).height } else { 0.0 };
         self.note.measure(env.text, t, w).height.max(bh) + py * 2.0
     }
 
@@ -361,43 +364,37 @@ impl Block for LookStatus {
         let w = self.note_width(env.text, t, rect.width);
         let nh = self.note.measure(env.text, t, w).height;
         self.note.set_rect(Rect::new(rect.x + px, rect.center().y - nh * 0.5, w, nh));
-        let bs: Size = self.copy.preferred_size(env.text, t);
-        self.copy.set_rect(Rect::new(rect.right() - px - bs.width + t.space(2), rect.center().y - bs.height * 0.5, bs.width, bs.height));
+        let bs: Size = self.fix.preferred_size(env.text, t);
+        self.fix.set_rect(Rect::new(rect.right() - px - bs.width + t.space(2), rect.center().y - bs.height * 0.5, bs.width, bs.height));
     }
 
     fn pointer(&mut self, env: &mut Env, e: &PointerEvent) -> bool {
-        if self.command.is_none() {
-            return false;
-        }
-        let r = self.copy.pointer(e, env.now);
-        if r.event.is_some()
-            && let Some(cmd) = &self.command
-        {
-            env.push(Action::Copy(cmd.clone()));
+        let r = self.fix.pointer(e, env.now);
+        if r.event.is_some() {
+            self.fix.activate(env);
         }
         r.repaint
     }
 
     fn key(&mut self, env: &mut Env, e: &KeyEvent) -> bool {
-        let Some(cmd) = self.command.clone() else { return false };
-        let r = self.copy.key(e, env.now);
+        let r = self.fix.key(e, env.now);
         if r.event.is_some() {
-            env.push(Action::Copy(cmd));
+            self.fix.activate(env);
             return true;
         }
         r.repaint
     }
 
     fn focusable(&self) -> bool {
-        self.command.is_some()
+        self.fix.is_some()
     }
 
     fn set_focus(&mut self, focused: bool, visible: bool, _now: Instant) {
-        self.copy.set_focus_visible(focused && visible);
+        self.fix.set_focus_visible(focused && visible);
     }
 
     fn cursor(&self, p: Point) -> Option<CursorShape> {
-        self.command.as_ref().and_then(|_| self.copy.cursor(p))
+        self.fix.cursor(p)
     }
 
     fn sync(&mut self, env: &mut Env) {
@@ -421,14 +418,12 @@ impl Block for LookStatus {
 
     fn set_theme(&mut self, theme: &Theme, now: Instant) {
         self.note.set_theme(theme, now);
-        self.copy.set_theme(theme, now);
+        self.fix.set_theme(theme, now);
     }
 
     fn draw(&mut self, ui: &mut Ui) {
         self.note.draw(ui);
-        if self.command.is_some() {
-            self.copy.draw(ui);
-        }
+        self.fix.draw(ui);
     }
 }
 
@@ -769,8 +764,10 @@ mod schema_tests {
         s.apply(Tone::Ok, "Uygulandı", None);
         assert_eq!((s.note.kind(), s.note.text()), (NoticeKind::Success, "Uygulandı"));
         assert_eq!(s.note.kind().icon(), IconName::CheckCircle);
-        s.apply(Tone::Warning, "Eksik paket", Some("paru -S x".into()));
-        assert_eq!((s.note.kind(), s.command.as_deref()), (NoticeKind::Warning, Some("paru -S x")));
+        s.apply(Tone::Warning, "Eksik paket", Some(Fix::Copy("paru -S x".into())));
+        assert_eq!((s.note.kind(), s.fix.fix()), (NoticeKind::Warning, Some(&Fix::Copy("paru -S x".into()))));
+        s.apply(Tone::Warning, "Eksik paket", Some(Fix::Install(vec!["qt6ct".into()])));
+        assert!(matches!(s.fix.fix(), Some(Fix::Install(n)) if n == &["qt6ct"]), "depo paketi: Kur düğmesi, komut yok");
         s.apply(Tone::Info, "Uygulanıyor…", None);
         assert_eq!(s.note.kind(), NoticeKind::Info);
         let mut text = TextSystem::new();

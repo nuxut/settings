@@ -17,9 +17,10 @@
 //!   dosyada yazılı ama kurulu olmayan seçim (soluk).
 //! - En sonda **kurulu olmayan aileler** soluk kart olarak ("Kurulu değil", AUR ise "· AUR"):
 //!   seçilmez — config'e var olmayan tema adı yazılmaz. Karta tık/Enter ızgaranın altında o ailenin
-//!   kurulum komutunu gösterir ve kopyalama düğmesi sunar: repo `sudo pacman -S`, AUR kurulu
-//!   yardımcıyla (paru, yoksa yay; ikisi de yoksa `paru -S` + "AUR yardımcısı gerekir" notu —
-//!   [`look::aur_helper`]).
+//!   düzeltmesini gösterir: resmî depo paketi "Kur" düğmesi (yönetici onayı, kök yardımcının
+//!   `packages` alanı; kullanıcı kararı 2026-10-17 — kök komutu yazdırılmaz), AUR paketi kurulu
+//!   yardımcının kopyalanacak komutu (paru, yoksa yay; ikisi de yoksa `paru -S` + "AUR yardımcısı
+//!   gerekir" notu — [`look::aur_helper`]).
 //! - Seçili tema kurulu değilse (önerilen ya da dosyadaki) ızgaranın altında not; önerilen ailenin
 //!   paketi katalogda biliniyorsa kurulum komutu da.
 //! - Eski shell (katalog yok) ya da shell yok: yalnızca önerilen + kurulu temalar; komut yok.
@@ -37,7 +38,7 @@ use nuxut::i18n::t;
 use nuxut::ui::input::{CursorShape, Key, KeyEvent, KeyState, PointerEvent, PointerKind};
 use nuxut::ui::style::{FOCUS_RING, HAIRLINE, faded_mark, faded_text, focus_ring, hairline};
 use nuxut::ui::{
-    Button, ButtonVariant, Icon, IconName, IconView, Interaction, Label, MAX_SEGMENTS, MIN_SEGMENTS, Segment, SegmentedButton, Select, SelectEvent, TextRole, Ui,
+    Icon, IconName, IconView, Interaction, Label, MAX_SEGMENTS, MIN_SEGMENTS, Segment, SegmentedButton, Select, SelectEvent, TextRole, Ui,
     text_style,
 };
 use nuxut::{Border, Color, Corners, Point, Rect, RectStyle, TextSystem, Theme};
@@ -48,7 +49,9 @@ use super::theme_card_preview::{self as card_preview, CardPreview};
 use crate::block::{Action, Block, Env};
 use crate::registry::SettingDesc;
 use crate::rows::{PreviousAction, row_padding};
-use crate::services::look::{self, AurHelper, CatalogFamily, InstalledTheme, PackageSource, ThemeKind};
+use super::fix_button::FixButton;
+use crate::services::look::{self, AurHelper, CatalogFamily, Fix, InstalledTheme, PackageSource, ThemeKind};
+use crate::services::packages;
 use crate::services::previews::{self, Inbox, Previews};
 use crate::store::Store;
 
@@ -88,8 +91,9 @@ pub struct CardSpec {
     pub value: CardValue,
     pub name: String,
     pub installed: bool,
-    /// Kurulum komutu (yalnızca kurulu olmayan ve paketi katalogda bilinen kartlarda).
-    pub install: Option<String>,
+    /// Kurulum düzeltmesi: depo paketi "Kur" düğmesi, AUR kopyalanacak komut (yalnızca kurulu
+    /// olmayan ve paketi katalogda bilinen kartlarda).
+    pub install: Option<Fix>,
     /// Paket AUR'da (açıklamada belirtilir).
     pub aur: bool,
     /// Aile kartı: ailenin kurulu varyantları (katalog sırası, en az 2); tekil kartta boş.
@@ -220,7 +224,7 @@ pub fn theme_cards(
             let mut c = CardSpec::new(CardValue::Recommended, rec_family.map_or_else(|| pretty(r), |f| f.name.clone()), false);
             // Ailenin başka varyantı kuruluysa paket zaten kurulu: komut yardımcı olmaz.
             if let Some(f) = rec_family.filter(|f| f.installed.is_empty()) {
-                c.install = Some(f.install_command(helper));
+                c.install = Some(f.fix(helper));
                 c.aur = f.source == PackageSource::Aur;
             }
             c
@@ -258,7 +262,7 @@ pub fn theme_cards(
     let rec_card_family = rec_family.filter(|_| !out[0].installed).map(|f| f.family.as_str());
     for f in cat.iter().filter(|f| f.installed.is_empty() && Some(f.family.as_str()) != rec_card_family) {
         let mut c = CardSpec::new(CardValue::Install, f.name.clone(), false);
-        c.install = Some(f.install_command(helper));
+        c.install = Some(f.fix(helper));
         c.aur = f.source == PackageSource::Aur;
         out.push(c);
     }
@@ -551,8 +555,7 @@ pub struct ThemeGrid {
     /// Tarama sürerken / hiç tema yokken başlığın altında.
     note: Label,
     footer: Label,
-    copy: Button,
-    command: Option<String>,
+    fix: FixButton,
     previous: PreviousAction,
     /// AUR komutlarının yardımcısı (oturumda bir kez aranır).
     helper: Option<AurHelper>,
@@ -592,8 +595,7 @@ impl ThemeGrid {
             picker: None,
             note: Label::new("", text_style(theme, TextRole::Caption)),
             footer: Label::new("", text_style(theme, TextRole::Caption)),
-            copy: Button::new(theme, ButtonVariant::Text).with_icon(theme, Icon::named(IconName::Copy)).with_label(theme, t!("settings-theme-grid-button-copy-command")),
-            command: None,
+            fix: FixButton::new(theme, t!("settings-theme-grid-button-copy-command")),
             previous: PreviousAction::new(theme, desc),
             helper: look::aur_helper(),
             cols: 1,
@@ -686,36 +688,44 @@ impl ThemeGrid {
         }
     }
 
-    /// Izgara altı: gösterilen aile kartının kurulum komutu, yoksa seçili tema kurulu değilse not
-    /// (paketi katalogda biliniyorsa komutla). AUR komutunda yardımcı yoksa kısa not eklenir.
+    /// Izgara altı: gösterilen aile kartının kurulumu, yoksa seçili tema kurulu değilse not (paketi
+    /// katalogda biliniyorsa düzeltmesiyle: depo paketi "Kur" düğmesi, AUR komutu). AUR komutunda
+    /// yardımcı yoksa kısa not; son kurulum başarısızsa söylenir.
     fn update_footer(&mut self) {
         let family = self.shown_family.and_then(|i| self.cards.get(i)).filter(|c| c.spec.value == CardValue::Install);
         let missing = || self.selected().and_then(|i| self.cards.get(i)).filter(|c| !c.spec.installed);
-        let (mut text, command, aur) = match (family, family.is_none().then(missing).flatten()) {
+        let (mut text, fix, aur) = match (family, family.is_none().then(missing).flatten()) {
             (Some(c), _) => {
-                let cmd = c.spec.install.clone();
-                let text = match &cmd {
-                    Some(cmd) => t!("settings-theme-grid-footer-missing-command", name = c.spec.name.as_str(), command = cmd.as_str()),
-                    None => t!("settings-theme-grid-footer-missing", name = c.spec.name.as_str()),
+                let fix = c.spec.install.clone();
+                let name = c.spec.name.as_str();
+                let text = match &fix {
+                    Some(Fix::Copy(cmd)) => t!("settings-theme-grid-footer-missing-command", name = name, command = cmd.as_str()),
+                    Some(Fix::Install(_)) => t!("settings-theme-grid-footer-missing-install", name = name),
+                    None => t!("settings-theme-grid-footer-missing", name = name),
                 };
-                (text, cmd, c.spec.aur)
+                (text, fix, c.spec.aur)
             }
             (None, Some(c)) => {
-                let cmd = c.spec.install.clone();
-                let text = match &cmd {
-                    Some(cmd) => t!("settings-theme-grid-footer-fallback-command", name = c.spec.name.as_str(), command = cmd.as_str()),
-                    None => t!("settings-theme-grid-footer-fallback", name = c.spec.name.as_str()),
+                let fix = c.spec.install.clone();
+                let name = c.spec.name.as_str();
+                let text = match &fix {
+                    Some(Fix::Copy(cmd)) => t!("settings-theme-grid-footer-fallback-command", name = name, command = cmd.as_str()),
+                    Some(Fix::Install(_)) => t!("settings-theme-grid-footer-fallback-install", name = name),
+                    None => t!("settings-theme-grid-footer-fallback", name = name),
                 };
-                (text, cmd, c.spec.aur)
+                (text, fix, c.spec.aur)
             }
             (None, None) => (String::new(), None, false),
         };
-        if command.is_some() && look::needs_helper_note(aur, self.helper) {
+        if matches!(fix, Some(Fix::Copy(_))) && look::needs_helper_note(aur, self.helper) {
             text = format!("{text} — {}", look::aur_helper_note());
         }
+        if matches!(fix, Some(Fix::Install(_))) && packages::last() == Some(packages::Outcome::Failed) {
+            text = format!("{text} {}", t!("settings-packages-failed"));
+        }
         self.footer.set_text(&text);
-        self.command = command;
-        if self.command.is_none() && self.part == Part::Copy {
+        self.fix.set_fix(fix, Instant::now());
+        if !self.fix.is_some() && self.part == Part::Copy {
             self.part = Part::Cards;
         }
     }
@@ -840,9 +850,9 @@ impl ThemeGrid {
             return 0.0;
         }
         let (px, _) = row_padding(theme);
-        let bw = if self.command.is_some() { self.copy.preferred_size(text, theme).width + theme.space(3) } else { 0.0 };
+        let bw = if self.fix.is_some() { self.fix.preferred_size(text, theme).width + theme.space(3) } else { 0.0 };
         self.footer.set_max_width(Some((width - px * 2.0 - bw).max(theme.space(20))));
-        let bh = if self.command.is_some() { self.copy.preferred_size(text, theme).height } else { 0.0 };
+        let bh = if self.fix.is_some() { self.fix.preferred_size(text, theme).height } else { 0.0 };
         theme.space(3) + self.footer.measure(text).height.max(bh)
     }
 
@@ -880,7 +890,7 @@ impl ThemeGrid {
         if self.picker.is_some() {
             v.push(Part::Variant);
         }
-        if self.command.is_some() {
+        if self.fix.is_some() {
             v.push(Part::Copy);
         }
         v
@@ -888,7 +898,7 @@ impl ThemeGrid {
 
     fn sync_focus_rings(&mut self) {
         let on = self.focus_visible;
-        self.copy.set_focus_visible(on && self.part == Part::Copy);
+        self.fix.set_focus_visible(on && self.part == Part::Copy);
         if let Some(p) = &mut self.picker {
             p.set_focus_visible(on && self.part == Part::Variant);
         }
@@ -952,11 +962,11 @@ impl Block for ThemeGrid {
         }
         self.footer_top = self.grid_bottom + picker_h;
         self.footer_height(env.text, t, rect.width);
-        if self.command.is_some() {
-            let bs = self.copy.preferred_size(env.text, t);
+        if self.fix.is_some() {
+            let bs = self.fix.preferred_size(env.text, t);
             let fh = self.footer.measure(env.text).height.max(bs.height);
             let cy = self.footer_top + t.space(3) + fh * 0.5;
-            self.copy.set_rect(Rect::new(rect.right() - px - bs.width + t.space(2), cy - bs.height * 0.5, bs.width, bs.height));
+            self.fix.set_rect(Rect::new(rect.right() - px - bs.width + t.space(2), cy - bs.height * 0.5, bs.width, bs.height));
         }
     }
 
@@ -1014,11 +1024,11 @@ impl Block for ThemeGrid {
             self.choose(env, i);
             return true;
         }
-        if let Some(cmd) = self.command.clone() {
-            let r = self.copy.pointer(e, now);
+        if self.fix.is_some() {
+            let r = self.fix.pointer(e, now);
             repaint |= r.repaint;
             if r.event.is_some() {
-                env.push(Action::Copy(cmd));
+                self.fix.activate(env);
                 return true;
             }
         }
@@ -1028,10 +1038,12 @@ impl Block for ThemeGrid {
     fn key(&mut self, env: &mut Env, e: &KeyEvent) -> bool {
         match self.part {
             Part::Copy => {
-                let Some(cmd) = self.command.clone() else { return false };
-                let r = self.copy.key(e, env.now);
+                if !self.fix.is_some() {
+                    return false;
+                }
+                let r = self.fix.key(e, env.now);
                 if r.event.is_some() {
-                    env.push(Action::Copy(cmd));
+                    self.fix.activate(env);
                     return true;
                 }
                 return r.repaint;
@@ -1105,8 +1117,8 @@ impl Block for ThemeGrid {
         if let Some(c) = self.picker.as_ref().and_then(|pk| pk.cursor(p)) {
             return Some(c);
         }
-        if self.command.is_some()
-            && let Some(c) = self.copy.cursor(p)
+        if self.fix.is_some()
+            && let Some(c) = self.fix.cursor(p)
         {
             return Some(c);
         }
@@ -1133,7 +1145,7 @@ impl Block for ThemeGrid {
         self.head.set_theme(theme);
         self.note.set_style(text_style(theme, TextRole::Caption));
         self.footer.set_style(text_style(theme, TextRole::Caption));
-        self.copy.set_theme(theme, now);
+        self.fix.set_theme(theme, now);
         self.previous.set_theme(theme, now);
         if let Some(p) = &mut self.picker {
             p.set_theme(theme, now);
@@ -1220,11 +1232,11 @@ impl Block for ThemeGrid {
         }
         if !self.footer.text().is_empty() {
             let fh = self.footer.measure_in(ui.painter).height;
-            let line_h = if self.command.is_some() { self.copy.rect().height.max(fh) } else { fh };
+            let line_h = if self.fix.is_some() { self.fix.rect().height.max(fh) } else { fh };
             let cy = self.footer_top + t.space(3) + line_h * 0.5;
             self.footer.draw(ui.painter, Point::new(x, cy - fh * 0.5), ui.fade(c.on_surface_variant));
-            if self.command.is_some() {
-                self.copy.draw(ui);
+            if self.fix.is_some() {
+                self.fix.draw(ui);
             }
         }
         // Seçici en son: açık menüsü kartların ve notun üstünde.
@@ -1285,13 +1297,13 @@ mod tests {
         // Önerilen aile kurulu değil: önerilen kart onu temsil eder (ayrı Vimix aile kartı yok).
         assert_eq!(cards[0].name, "Vimix");
         assert!(!cards[0].installed);
-        assert_eq!(cards[0].install.as_deref(), Some("sudo pacman -S vimix-cursors"));
+        assert_eq!(cards[0].install, Some(Fix::Install(vec!["vimix-cursors".into()])), "depo: Kur düğmesi");
         // Çok varyantlı aile: başlık aile adı, varyantlar katalog sırasıyla.
         assert_eq!(cards[1].name, "Capitaine");
         assert_eq!(ids(&cards[1]), ["capitaine-cursors", "capitaine-cursors-light"]);
         assert!(cards[2].variants.is_empty() && cards[3].variants.is_empty(), "katalog dışı tekil");
         assert_eq!(cards[4].name, "Oreo");
-        assert_eq!(cards[4].install.as_deref(), Some("paru -S oreo-cursors-bin"));
+        assert_eq!(cards[4].install, Some(Fix::Copy("paru -S oreo-cursors-bin".into())));
         assert!(cards[4].aur && !cards[4].installed);
         assert!(cards[1..4].iter().all(|c| c.installed && c.install.is_none()));
         // Future katalogda yok: gösterilmez; yerel aile listesi yok.
@@ -1445,7 +1457,7 @@ mod tests {
         assert!(g.key(&mut env, &press(Key::Down)));
         assert_eq!(g.focus_i, 4);
         assert!(g.key(&mut env, &press(Key::Enter)), "Sweet: kurulu değil");
-        assert_eq!(g.command.as_deref(), Some("paru -S sweet-cursors-git"));
+        assert_eq!(g.fix.fix(), Some(&Fix::Copy("paru -S sweet-cursors-git".into())));
         assert!(g.footer.text().contains("paru -S sweet-cursors-git"));
         assert!(g.key(&mut env, &press(Key::Up)));
         assert!(g.key(&mut env, &press(Key::Right)));
@@ -1476,7 +1488,8 @@ mod tests {
         g.cards = specs.into_iter().map(|s| Card::new(&theme, ThemeKind::Cursors, s, "")).collect();
         g.built_for = Some(BuildKey { installed: vec![], catalog: Some(cat), current: None, rec: Some("Vimix-cursors".into()) });
         g.update_footer();
-        assert_eq!(g.command.as_deref(), Some("sudo pacman -S vimix-cursors"));
+        assert_eq!(g.fix.fix(), Some(&Fix::Install(vec!["vimix-cursors".into()])));
+        assert!(!g.footer.text().contains("pacman"), "kök komutu yazdırılmaz: {}", g.footer.text());
         assert!(g.footer.text().starts_with("Vimix kurulu değil"));
         assert!(!g.footer.text().contains(&look::aur_helper_note()), "depo paketi: not yok");
     }
@@ -1577,10 +1590,10 @@ mod tests {
         for (helper, cmd, note) in [(Some(AurHelper::Yay), "yay -S oreo-cursors-bin", false), (None, "paru -S oreo-cursors-bin", true)] {
             let mut g = grid_with(&theme, &store, key(), helper);
             let i = oreo(&g);
-            assert_eq!(g.cards[i].spec.install.as_deref(), Some(cmd));
+            assert_eq!(g.cards[i].spec.install, Some(Fix::Copy(cmd.into())));
             g.shown_family = Some(i);
             g.update_footer();
-            assert_eq!(g.command.as_deref(), Some(cmd));
+            assert_eq!(g.fix.fix(), Some(&Fix::Copy(cmd.into())));
             assert!(g.footer.text().contains(cmd));
             assert_eq!(g.footer.text().ends_with(&look::aur_helper_note()), note, "{}", g.footer.text());
         }
