@@ -20,6 +20,8 @@
 //!
 //! `night-light status`: kip `NUXUT_FAKE_NIGHT` (bkz. [`night_status`]).
 //!
+//! `NUXUT_FAKE_HYPR_KEYS=1`: `hypr status` kısayol çakışmalarıyla (Kısayollar sayfası).
+//!
 //! `NUXUT_FAKE_LOOK=external`: `look status` sürüm 5, `last_apply.external` iki dosyayla (eksik paket yok).
 //!
 //! `magnifier status|on|off`, `osk status|show|hide` (magnifier-v1, osk-v1): süreç içi durum;
@@ -42,6 +44,9 @@ const LIST_MODE: &str = r#"[{"id":"20261010T120500Z-0b2c","at":"2026-10-10T12:05
 const LIST_DEFAULTS_BROWSER: &str = r#"[{"id":"20261013T110000Z-d0e0","at":"2026-10-13T11:00:00Z","setting":"defaults.browser","label":"Tarayıcı","source":"settings","state":"applied","pinned":false,"fragments":1,"conflicts":0}]"#;
 /// `msg hypr status` (shell `SyncStatus`; eski `backup` alanı yok, bu turda snapshot alınmadı).
 const HYPR_STATUS: &str = r#"{"source":"removed_by_user","kind":"hyprlang","config":"~/.config/hypr/hyprland.conf","generated":"~/.config/hypr/nuxut/nuxut.conf","launch":"exec_once","overrides":[],"conflicts":[],"errors":[]}"#;
+/// `NUXUT_FAKE_HYPR_KEYS=1`: end4 benzeri zincirde kısayol çakışmaları (Kısayollar sayfasının seçim
+/// düğmeleri): pencere kapatma kullanıcıda (temel katman), pano devralınamıyor, ses Nuxut'ta.
+const HYPR_STATUS_KEYS: &str = r#"{"source":"present","kind":"hyprlang","config":"~/.config/hypr/hyprland.conf","overrides":[],"conflicts":[{"action":"close_window","combo":"SUPER+q","file":"~/.config/hypr/hyprland/keybinds.conf","line":88,"reason":"user_wins","can_take":true},{"action":"clipboard","combo":"SUPER+SHIFT+v","file":"~/.config/hypr/custom/late.conf","line":1,"reason":"read_after","can_take":false}],"taken_over":[{"action":"volume_up","combo":"xf86audioraisevolume","file":"~/.config/hypr/hyprland/keybinds.conf","line":40,"reason":"default","can_take":true}],"errors":[]}"#;
 
 /// Bilinen kayıtların ayarı (`restore --setting` denetimi için).
 fn setting_of(id: &str) -> Option<&'static str> {
@@ -290,6 +295,7 @@ fn main() {
         let reply = match args.as_slice() {
             ["ping"] => "pong".to_owned(),
             ["look", "status"] => status(),
+            ["hypr", "status"] if std::env::var_os("NUXUT_FAKE_HYPR_KEYS").is_some() => HYPR_STATUS_KEYS.to_owned(),
             ["hypr", "status"] => HYPR_STATUS.to_owned(),
             ["input", "status"] => input_status(),
             ["night-light", "status"] => night_status(),

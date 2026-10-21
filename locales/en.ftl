@@ -1047,6 +1047,38 @@ settings-keybinds-clash-wins = The same shortcut is also used by “{ $other }�
 # Değişkenler: $other (diğer eylemin adı, ör. "Sesi kapat").
 settings-keybinds-clash-loses = The same shortcut is also used by “{ $other }”; it does not work here
 
+## Hyprland ayarıyla çakışan kısayollar (2026-10-17)
+
+# Nerede: Kısayollar sayfası, satırın altındaki bilgi; kullanıcının Hyprland ayarında aynı tuş bağlı ve onunki çalışıyor. Anlam: Bu tuşta kullanıcının kendi kısayolunun geçerli olduğu.
+# Değişkenler: $place (boş ya da " (keybinds.conf:40)").
+settings-keybinds-user-kept = This key is also bound in your Hyprland config; yours is in effect{ $place }
+
+# Nerede: Kısayollar sayfası, satırın altındaki bilgi; Nuxut kullanıcının aynı tuşlu kısayolunun yerine geçti, kullanıcının dosyası değişmedi.
+# Değişkenler: $place (boş ya da " (keybinds.conf:7)").
+settings-keybinds-taken = Nuxut's shortcut replaces the same key from your Hyprland config{ $place }
+
+# Nerede: Kısayollar sayfası, satırın altındaki uyarı; Nuxut'unki isteniyor ama kullanıcının aynı tuşlu kısayolu devralınamıyor.
+# Değişkenler: $place (boş ya da " (late.conf:1)"), $why (neden, aşağıdaki metinlerden biri).
+settings-keybinds-blocked = This key is also bound in your Hyprland config{ $place }; { $why }. Assign another key or keep yours
+
+# Nerede: settings-keybinds-blocked içindeki neden. Anlam: kullanıcının satırı Nuxut'un satırından sonra okunuyor.
+settings-keybinds-blocked-read-after = it is read after Nuxut's line, so Nuxut cannot remove it
+
+# Nerede: settings-keybinds-blocked içindeki neden. Anlam: Nuxut'un ayar dosyası Hyprland'e yüklenmiyor.
+settings-keybinds-blocked-not-loaded = Nuxut's settings file is not loaded by Hyprland
+
+# Nerede: settings-keybinds-blocked içindeki neden. Anlam: kısayol Caps Lock gibi özel bir değiştirici kullanıyor.
+settings-keybinds-blocked-special-mods = it uses a special modifier (Caps Lock etc.)
+
+# Nerede: settings-keybinds-blocked içindeki neden. Anlam: neden bilinmiyor ya da Lua ayarında yer bulunamıyor.
+settings-keybinds-blocked-other = Nuxut cannot take it over
+
+# Nerede: Kısayollar sayfası, çakışan satırdaki düğme. Anlam: bu tuşta Nuxut'un kısayolu çalışsın (kullanıcınınki Nuxut'un katmanında kaldırılır, dosyası değişmez).
+settings-keybinds-use-nuxut = Use Nuxut's
+
+# Nerede: Kısayollar sayfası, çakışan satırdaki düğme. Anlam: bu tuşta kullanıcının kendi Hyprland kısayolu çalışsın.
+settings-keybinds-keep-mine = Keep mine
+
 ## Tuş başlıkları
 
 # Nerede: Kısayollar sayfası, kısayol alanındaki tuş başlıkları ve yakalarken basılı değiştiriciler. Anlam: Super değiştiricisinin başlığı.
@@ -6036,6 +6068,23 @@ settings-a11y-results = Search results
 # Nerede: Ekran okuyucu — ayar satırındaki varsayılana döndür düğmesinin adı; görünmez, sesli okunur. Anlam: bu ayarı varsayılan değerine sıfırlar.
 # Değişkenler: $setting (ayarın görünen adı, örnek: "Bar yüksekliği").
 settings-a11y-reset = { $setting }: Reset to default
+
+# Nerede: Ekran okuyucu — Kısayollar satırının açıklaması; görünmez, sesli okunur. Anlam: bu tuşta Nuxut'un kısayolu çalışıyor.
+settings-a11y-keybind-holder-nuxut = Nuxut's shortcut
+
+# Nerede: Ekran okuyucu — Kısayollar satırının açıklaması. Anlam: bu tuşta kullanıcının Hyprland ayarındaki kısayolu çalışıyor.
+settings-a11y-keybind-holder-user = The shortcut from your Hyprland config is in effect
+
+# Nerede: Ekran okuyucu — Kısayollar satırının açıklaması. Anlam: Nuxut'un kısayolu kullanıcınınkini devralamadı, tuş beklendiği gibi çalışmayabilir.
+settings-a11y-keybind-holder-blocked = Nuxut's shortcut could not take over
+
+# Nerede: Ekran okuyucu — Kısayollar satırındaki "Nuxut'unkini kullan" / "Benimkini koru" düğmesinin açıklaması. Anlam: bu eylemin tuşunda kimin kısayolunun çalışacağını seçer.
+# Değişkenler: $setting (eylemin adı, örnek: "Pencereyi kapat").
+settings-a11y-keybind-owner = { $setting }: choose whose shortcut uses this key
+
+# Nerede: Ekran okuyucu — Kısayollar satırındaki temizle düğmesinin adı. Anlam: kısayolu atanmamış yapar.
+# Değişkenler: $setting (eylemin adı, örnek: "Pencereyi kapat").
+settings-a11y-keybind-clear = { $setting }: Remove shortcut
 
 ## Güç: Kilit ve boşta
 

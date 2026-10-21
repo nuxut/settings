@@ -3,13 +3,18 @@
 //! yazılır; Escape iptal, Geri silme atanmamış yapar. Yanında temizle ve varsayılana dön.
 //! Aynı birleşim iki eylemdeyse satır altında uyarı (shell sıradaki ilkini tutar).
 //! Ayrıştırma ve yakalama: `crate::keybind`.
+//!
+//! Hyprland ayarında aynı tuş bağlıysa (`msg hypr status`, [`hypr_status::key`]) satır bunu
+//! söyler ve tek tıkla seçtirir (2026-10-17): kullanıcınınki çalışıyorsa "Nuxut'unkini kullan",
+//! Nuxut'unki çalışıyorsa ya da devralınamıyorsa "Benimkini koru" → `[keybind_owner] <eylem>`.
+//! Düğmeye Tab ile ulaşılır (alandan sonra).
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use nuxut::i18n::t;
 use nuxut::ui::input::{Button as MouseButton, CursorShape, Key, KeyEvent, KeyState, PointerEvent, PointerKind};
 use nuxut::ui::style::{FOCUS_RING, focus_ring, state_layer_under};
-use nuxut::ui::{Icon, IconButton, IconButtonVariant, IconName, Interaction, Label, TextRole, Ui, text_style};
+use nuxut::ui::{Button, ButtonVariant, Icon, IconButton, IconButtonVariant, IconName, Interaction, Label, TextRole, Ui, text_style};
 use nuxut::{Border, Corners, Point, Rect, RectStyle, Size, TextSystem, Theme};
 use toml_edit::Value;
 
@@ -17,7 +22,68 @@ use crate::block::{Action, Block, Env};
 use crate::keybind::{self, Binding, Capture, Shape};
 use crate::registry::{self, SettingDesc};
 use crate::rows::row_padding;
-use crate::store::Store;
+use crate::services::hypr_status::{self, KeyRelation};
+use crate::store::{KeyPath, Store};
+
+/// Shell'in `shell.toml` değişimini uygulayıp Hyprland'e yazması için beklenen süre.
+const APPLY_SETTLE: Duration = Duration::from_millis(700);
+
+/// Çakışan tuşta seçilecek taraf (`[keybind_owner]` değeri).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Owner {
+    Nuxut,
+    User,
+}
+
+impl Owner {
+    fn value(self) -> &'static str {
+        match self {
+            Owner::Nuxut => "nuxut",
+            Owner::User => "user",
+        }
+    }
+}
+
+/// Bu tuşta kimin kısayolu çalışıyor (ekran okuyucu açıklaması).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Holder {
+    /// Nuxut'unki (çakışma yok ya da devralındı).
+    Nuxut,
+    /// Kullanıcının Hyprland ayarındaki.
+    User,
+    /// Nuxut'unki isteniyor ama devralınamıyor.
+    Blocked,
+}
+
+impl Holder {
+    fn text(self) -> String {
+        match self {
+            Holder::Nuxut => t!("settings-a11y-keybind-holder-nuxut"),
+            Holder::User => t!("settings-a11y-keybind-holder-user"),
+            Holder::Blocked => t!("settings-a11y-keybind-holder-blocked"),
+        }
+    }
+}
+
+/// Hyprland ilişkisinden durum satırı ve düğmenin seçeceği taraf.
+fn relation_status(k: &hypr_status::KeyConflict) -> (Status, Option<Owner>) {
+    let place = k.place().map(|p| format!(" ({p})")).unwrap_or_default();
+    match &k.relation {
+        KeyRelation::UserKept { can_take, .. } => {
+            (Status::Hint(t!("settings-keybinds-user-kept", place = place)), can_take.then_some(Owner::Nuxut))
+        }
+        KeyRelation::Taken => (Status::Hint(t!("settings-keybinds-taken", place = place)), Some(Owner::User)),
+        KeyRelation::Blocked { reason } => {
+            let why = match reason.as_deref() {
+                Some("read_after") => t!("settings-keybinds-blocked-read-after"),
+                Some("not_loaded") => t!("settings-keybinds-blocked-not-loaded"),
+                Some("special_mods") => t!("settings-keybinds-blocked-special-mods"),
+                _ => t!("settings-keybinds-blocked-other"),
+            };
+            (Status::Warn(t!("settings-keybinds-blocked", place = place, why = why)), Some(Owner::User))
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum Status {
@@ -55,6 +121,14 @@ pub struct KeybindRow {
     /// İmleç satırın üstünde: temizle düğmesi yalnızca o zaman (on üç × gürültü olmasın).
     hovered: bool,
     rect: Rect,
+    /// Hyprland çakışmasında "Nuxut'unkini kullan" / "Benimkini koru" ve seçeceği taraf.
+    owner_button: Button,
+    owner: Option<Owner>,
+    /// Bu tuşta kimin kısayolu çalışıyor (ekran okuyucu açıklaması).
+    holder: Holder,
+    /// Klavye odağı bu satırda ve düğmede mi (değilse alanda).
+    focused: bool,
+    on_button: bool,
 }
 
 impl KeybindRow {
@@ -80,9 +154,34 @@ impl KeybindRow {
             focus_visible: false,
             hovered: false,
             rect: Rect::ZERO,
+            owner_button: Button::new(theme, ButtonVariant::Tonal).with_label(theme, ""),
+            owner: None,
+            holder: Holder::Nuxut,
+            focused: false,
+            on_button: false,
         };
         row.refresh(theme, store);
         row
+    }
+
+    fn action_name(&self) -> &'static str {
+        self.desc.path.strip_prefix("keybinds.").unwrap_or(self.desc.path)
+    }
+
+    /// "Nuxut'unkini kullan" / "Benimkini koru": `[keybind_owner] <eylem>` yazılır, shell uygulayınca
+    /// durum yeniden sorulur.
+    fn choose(&mut self, env: &mut Env, owner: Owner) {
+        let path = KeyPath::parse(&format!("keybind_owner.{}", self.action_name()));
+        env.set(self.desc.label(), self.desc.file, path, Some(Value::from(owner.value())));
+        env.push(Action::Seal);
+        hypr_status::refresh(APPLY_SETTLE);
+    }
+
+    fn sync_rings(&mut self) {
+        if self.owner.is_none() {
+            self.on_button = false;
+        }
+        self.owner_button.set_focus_visible(self.focus_visible && self.on_button);
     }
 
     fn clear_visible(&self) -> bool {
@@ -128,6 +227,8 @@ impl KeybindRow {
         self.show_clear = !self.capturing && matches!(binding, Binding::Assigned(_) | Binding::Invalid(_));
         let is_default = store.get(self.desc.file, &self.desc.key()).is_none() || same_combo(self.shape, &self.desc.string(store), self.default_text(store));
         self.show_reset = !self.capturing && !is_default;
+        self.owner = None;
+        self.holder = Holder::Nuxut;
         self.status = if self.capturing {
             match &self.capture_note {
                 Some(n) => Status::Warn(n.clone()),
@@ -139,9 +240,29 @@ impl KeybindRow {
             }
         } else if let Binding::Invalid(e) = &binding {
             Status::Warn(invalid_text(e))
+        } else if let Some(c) = clash_text(self.desc, store) {
+            Status::Warn(c)
+        } else if let Some(k) = hypr_status::key(self.action_name()).filter(|_| matches!(binding, Binding::Assigned(_))) {
+            let (status, owner) = relation_status(&k);
+            self.owner = owner;
+            self.holder = match k.relation {
+                KeyRelation::UserKept { .. } => Holder::User,
+                KeyRelation::Taken => Holder::Nuxut,
+                KeyRelation::Blocked { .. } => Holder::Blocked,
+            };
+            status
         } else {
-            clash_text(self.desc, store).map_or(Status::None, Status::Warn)
+            Status::None
         };
+        if let Some(o) = self.owner {
+            // Sakin bilgi satırında metin düğmesi; uyarıda (tuş çalışmıyor olabilir) tonal.
+            self.owner_button.set_variant(if matches!(self.status, Status::Warn(_)) { ButtonVariant::Tonal } else { ButtonVariant::Text });
+            self.owner_button.set_label(&match o {
+                Owner::Nuxut => t!("settings-keybinds-use-nuxut"),
+                Owner::User => t!("settings-keybinds-keep-mine"),
+            });
+        }
+        self.sync_rings();
         match &self.status {
             Status::None => {
                 self.status_label.set_text("");
@@ -181,6 +302,7 @@ impl KeybindRow {
         let value = text.filter(|t| !same_combo(self.shape, t, self.default_text(env.store))).map(Value::from);
         env.set(self.desc.label(), self.desc.file, self.desc.key(), value);
         env.push(Action::Seal);
+        hypr_status::refresh(APPLY_SETTLE);
     }
 
     fn finish(&mut self, env: &mut Env, combo: keybind::Combo) {
@@ -263,6 +385,24 @@ impl KeybindRow {
         let icons = (self.icon_size(t).width + t.space(1)) * 2.0;
         (width - px * 2.0 - field.width - icons - t.space(4)).max(t.space(20))
     }
+
+    /// Seçim düğmesinin boyutu (düğme yoksa sıfır).
+    fn button_size(&mut self, text: &mut TextSystem, theme: &Theme) -> Size {
+        if self.owner.is_some() { self.owner_button.preferred_size(text, theme) } else { Size::ZERO }
+    }
+
+    /// Metin sütunu: başlık, (varsa) durum satırı ve seçim düğmesi.
+    fn text_height(&mut self, text: &mut TextSystem, theme: &Theme) -> f32 {
+        let mut h = self.title.measure(text).height;
+        if self.status != Status::None {
+            h += theme.space(1) + self.status_label.measure(text).height;
+        }
+        let b = self.button_size(text, theme);
+        if b.height > 0.0 {
+            h += theme.space(2) + b.height;
+        }
+        h
+    }
 }
 
 /// İki dizge aynı kısayol mu (ikisi de boş ya da ayrıştırılmış birleşimleri eşit).
@@ -309,6 +449,43 @@ impl Block for KeybindRow {
         Some(self.desc.id)
     }
 
+    // Ekran okuyucu (framework ADR-0011): alan = eylem adı, değer = tuş, açıklama = kimin kısayolu
+    // çalıştığı + durum satırı; seçim düğmesi ve geri al ayrı düğüm. AT eylemleri `app/a11y.rs`
+    // kapısında silinir: düğmeler yalnız gerçek Tab/Enter ve işaretçiyle çalışır (AT kuralı).
+    fn access(&self, tree: &mut nuxut::access::AccessTree) {
+        use nuxut::access::Role;
+        let title = self.title.text();
+        let keys = if self.caps.is_empty() {
+            self.empty.text().to_owned()
+        } else {
+            self.caps.iter().map(|l| l.text()).collect::<Vec<_>>().join(" + ")
+        };
+        let status = self.status_label.text();
+        // Atanmamış tuşun sahibi yok: yalnız durum.
+        let holder = if self.caps.is_empty() { String::new() } else { self.holder.text() };
+        let desc = [holder, status.to_owned()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(". ");
+        let key = self.desc.id;
+        tree.push(key, Role::Button)
+            .label(title)
+            .value(&keys)
+            .description(&desc)
+            .bounds(self.field)
+            .clickable()
+            .focused_if(self.focused && !self.on_button);
+        if self.owner.is_some() {
+            self.owner_button
+                .access(tree, (key, "owner"))
+                .description(&t!("settings-a11y-keybind-owner", setting = title))
+                .focused_if(self.focused && self.on_button);
+        }
+        if self.clear_visible() {
+            self.clear.access(tree, (key, "clear")).label(&t!("settings-a11y-keybind-clear", setting = title));
+        }
+        if self.show_reset {
+            self.reset.access(tree, (key, "reset")).label(&t!("settings-a11y-reset", setting = title));
+        }
+    }
+
     fn visible(&self, store: &Store) -> bool {
         self.desc.is_visible(store)
     }
@@ -319,11 +496,7 @@ impl Block for KeybindRow {
         let tw = self.text_width(env, width);
         self.title.set_max_width(Some(tw));
         self.status_label.set_max_width(Some(tw));
-        let mut h = self.title.measure(env.text).height;
-        if self.status != Status::None {
-            h += t.space(1) + self.status_label.measure(env.text).height;
-        }
-        h.max(self.field_size(env.text, t).height) + py * 2.0
+        self.text_height(env.text, t).max(self.field_size(env.text, t).height) + py * 2.0
     }
 
     fn place(&mut self, env: &mut Env, rect: Rect) {
@@ -336,6 +509,16 @@ impl Block for KeybindRow {
         let fs = self.field_size(env.text, t);
         let cy = rect.center().y;
         self.field = Rect::new(rect.right() - px - fs.width, cy - fs.height * 0.5, fs.width, fs.height);
+        // Seçim düğmesi metin sütununun altında (başlık + durum satırından sonra).
+        let bs = self.button_size(env.text, t);
+        if bs.width > 0.0 {
+            let bottom = cy + self.text_height(env.text, t) * 0.5;
+            // Metin düğmesinin yazısı satır metniyle hizalı (düğmenin iç boşluğu `space(3)`).
+            let inset = if self.owner_button.variant() == ButtonVariant::Text { t.space(3) } else { 0.0 };
+            self.owner_button.set_rect(Rect::new(rect.x + px - inset, bottom - bs.height, bs.width, bs.height));
+        } else {
+            self.owner_button.set_rect(Rect::ZERO);
+        }
         let is = self.icon_size(t);
         let mut x = self.field.x - t.space(1);
         if self.show_clear {
@@ -377,6 +560,14 @@ impl Block for KeybindRow {
                 return true;
             }
         }
+        if let Some(o) = self.owner.filter(|_| !self.capturing) {
+            let r = self.owner_button.pointer(e, now);
+            repaint |= r.repaint;
+            if r.event.is_some() {
+                self.choose(env, o);
+                return true;
+            }
+        }
         // Yakalarken başka yere tıklamak iptal eder.
         if self.capturing
             && let PointerKind::Press(MouseButton::Left) = e.kind
@@ -399,6 +590,14 @@ impl Block for KeybindRow {
             self.on_capture(env, e);
             return true;
         }
+        if self.on_button && let Some(o) = self.owner {
+            let r = self.owner_button.key(e, env.now);
+            if r.event.is_some() {
+                self.choose(env, o);
+                return true;
+            }
+            return r.repaint;
+        }
         if e.state != KeyState::Released && e.modifiers == Default::default() && matches!(e.key, Key::Enter | Key::Space) {
             self.start(env);
             return true;
@@ -415,7 +614,13 @@ impl Block for KeybindRow {
     }
 
     fn set_focus(&mut self, focused: bool, visible: bool, _now: Instant) {
+        // Yeni odak alanda başlar; Tab seçim düğmesine geçer ([`Block::focus_step`]).
+        if focused && !self.focused {
+            self.on_button = false;
+        }
+        self.focused = focused;
         self.focus_visible = focused && visible;
+        self.sync_rings();
         if !focused && self.capturing {
             self.capturing = false;
             self.held = 0;
@@ -434,11 +639,31 @@ impl Block for KeybindRow {
         if self.show_reset && let Some(c) = self.reset.cursor(p) {
             return Some(c);
         }
+        if self.owner.is_some() && let Some(c) = self.owner_button.cursor(p) {
+            return Some(c);
+        }
         self.field.contains(p).then_some(CursorShape::Pointer)
+    }
+
+    fn focus_step(&mut self, forward: bool, _now: Instant) -> bool {
+        if self.owner.is_none() || self.capturing || forward == self.on_button {
+            return false;
+        }
+        self.on_button = forward;
+        self.sync_rings();
+        true
     }
 
     fn sync(&mut self, env: &mut Env) {
         self.refresh(env.theme, env.store);
+    }
+
+    fn service_event(&mut self, env: &mut Env, event: &crate::services::Event) -> bool {
+        if matches!(event, crate::services::Event::Hypr) {
+            self.refresh(env.theme, env.store);
+            return true;
+        }
+        false
     }
 
     fn set_theme(&mut self, theme: &Theme, now: Instant) {
@@ -451,6 +676,7 @@ impl Block for KeybindRow {
         self.field_hover.set_theme(theme, now);
         self.clear.set_theme(theme, now);
         self.reset.set_theme(theme, now);
+        self.owner_button.set_theme(theme, now);
     }
 
     fn draw(&mut self, ui: &mut Ui) {
@@ -458,10 +684,11 @@ impl Block for KeybindRow {
         let c = &t.colors;
         let now = ui.now;
         let (px, _) = row_padding(t);
-        // Başlık + durum satırı dikeyde ortalı.
+        // Başlık + durum satırı (+ seçim düğmesi) dikeyde ortalı.
         let th = self.title.measure_in(ui.painter).height;
         let sh = if self.status == Status::None { 0.0 } else { t.space(1) + self.status_label.measure_in(ui.painter).height };
-        let y = self.rect.center().y - (th + sh) * 0.5;
+        let bh = if self.owner.is_some() { t.space(2) + self.owner_button.rect().height } else { 0.0 };
+        let y = self.rect.center().y - (th + sh + bh) * 0.5;
         self.title.draw(ui.painter, Point::new(self.rect.x + px, y), ui.fade(c.on_surface));
         let status_color = match self.status {
             Status::Warn(_) => c.error,
@@ -470,6 +697,9 @@ impl Block for KeybindRow {
         if self.status != Status::None {
             self.status_label.draw(ui.painter, Point::new(self.rect.x + px, y + th + t.space(1)), ui.fade(status_color));
         }
+        if self.owner.is_some() {
+            self.owner_button.draw(ui);
+        }
         if self.show_reset {
             self.reset.draw(ui);
         }
@@ -477,10 +707,10 @@ impl Block for KeybindRow {
             self.clear.draw(ui);
         }
         // Alan: kenarsız tonal kuyu (kartın üstünde `surface`, §5.2); yakalarken vurgu katmanı,
-        // yakalarken ya da klavye odağında vurgu halkası.
+        // yakalarken ya da klavye odağında (düğmede değilken) vurgu halkası.
         let f = self.field;
         let radii = Corners::uniform(f.height * 0.5);
-        let active = self.capturing || self.focus_visible;
+        let active = self.capturing || (self.focus_visible && !self.on_button);
         let border = active.then(|| Border { width: FOCUS_RING, color: ui.fade(focus_ring(t, &[c.surface])) });
         ui.painter.rect(f, &RectStyle { fill: ui.fade(c.surface), radii, border });
         if self.capturing {
@@ -539,6 +769,69 @@ mod tests {
         // Varsayılan medya tuşunu panele atamak çakışma doğurur.
         store.set(FileId::Shell, &KeyPath::parse("keybinds.panel_left"), Some(Value::from("XF86AudioMute")));
         assert!(clash_text(left, &store).unwrap().contains("Sesi kapat"));
+    }
+
+    /// Hyprland çakışması (2026-10-17): kullanıcınınki geçerliyse "Nuxut'unkini kullan", devralınmış
+    /// ya da devralınamıyorsa "Benimkini koru"; düğme `[keybind_owner]` yazar ve Tab ile ulaşılır.
+    #[test]
+    fn hypr_conflict_offers_one_click_choice() {
+        crate::i18n::use_turkish_for_tests();
+        let text = r#"{"source":"present","conflicts":[
+            {"action":"close_window","combo":"SUPER+q","file":"~/.config/hypr/hyprland/keybinds.conf","line":40,"reason":"user_wins","can_take":true},
+            {"action":"clipboard","combo":"SUPER+SHIFT+v","file":"~/.config/hypr/custom/late.conf","line":1,"reason":"read_after","can_take":false}
+        ],"taken_over":[{"action":"volume_up","combo":"xf86audioraisevolume","file":"~/k.conf","line":7,"reason":"default","can_take":true}]}"#;
+        hypr_status::set_for_test(hypr_status::parse_status(text));
+        let (_d, store) = store();
+        let theme = Theme::default();
+        let row = |id: &str| KeybindRow::new(&theme, registry::by_id(id).unwrap(), &store);
+
+        let mut q = row("keybinds.close_window");
+        assert_eq!(q.owner, Some(Owner::Nuxut));
+        assert!(matches!(&q.status, Status::Hint(s) if s.contains("sizinki geçerli (keybinds.conf:40)")), "{:?}", q.status);
+        let v = row("keybinds.clipboard");
+        assert_eq!(v.owner, Some(Owner::User));
+        assert!(matches!(&v.status, Status::Warn(s) if s.contains("sonra okunduğu") && s.contains("late.conf:1")), "{:?}", v.status);
+        let up = row("keybinds.volume_up");
+        assert_eq!(up.owner, Some(Owner::User));
+        assert!(matches!(&up.status, Status::Hint(s) if s.contains("yerine Nuxut'unki")), "{:?}", up.status);
+        assert_eq!(row("keybinds.media_next").owner, None, "çakışma yok: düğme yok");
+
+        // Tab alandan düğmeye; Enter "Nuxut'unkini kullan" yazar.
+        let now = Instant::now();
+        q.set_focus(true, true, now);
+        assert!(!q.on_button);
+        assert!(q.focus_step(true, now) && q.on_button);
+        assert!(!q.focus_step(true, now), "sonraki blok");
+        let mut text_sys = TextSystem::new();
+        let mut actions = Vec::new();
+        let mut env = Env { theme: &theme, store: &store, text: &mut text_sys, now, actions: &mut actions };
+        let enter = |state| KeyEvent { key: Key::Enter, state, text: None, modifiers: Default::default(), xkb: None };
+        q.key(&mut env, &enter(KeyState::Pressed));
+        q.key(&mut env, &enter(KeyState::Released));
+        let written: Vec<(String, Option<String>)> = actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Set { path, value, .. } => Some((path.to_string(), value.as_ref().and_then(Value::as_str).map(str::to_owned))),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(written, [("keybind_owner.close_window".to_owned(), Some("nuxut".to_owned()))]);
+
+        // Ekran okuyucu: eylem adı, tuş, kimin kısayolu ve durum; seçim düğmesi ayrı düğüm ve odakta.
+        let mut tree = nuxut::access::AccessTree::new();
+        q.access(&mut tree);
+        let field = tree.node(tree.id_for("keybinds.close_window")).unwrap();
+        assert_eq!(field.label(), Some("Pencereyi kapat"));
+        assert_eq!(field.value(), Some("Super + Q"));
+        let d = field.description().unwrap();
+        assert!(d.starts_with("Hyprland ayarınızdaki kısayol geçerli. ") && d.contains("keybinds.conf:40"), "{d}");
+        let owner = tree.node(tree.id_for(("keybinds.close_window", "owner"))).unwrap();
+        assert_eq!(owner.label(), Some("Nuxut'unkini kullan"));
+        assert_eq!(tree.focus(), tree.id_for(("keybinds.close_window", "owner")));
+        let mut tree = nuxut::access::AccessTree::new();
+        up.access(&mut tree);
+        assert!(tree.node(tree.id_for("keybinds.volume_up")).unwrap().description().unwrap().starts_with("Nuxut'un kısayolu. "));
+        hypr_status::set_for_test(None);
     }
 
     #[test]
